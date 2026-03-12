@@ -2,6 +2,31 @@
 
 An attention based fast weight episodic memory, in the same vein as the memory MLP from TTT / Titans and `fwPKM` from Sakana AI
 
+## Install
+
+```bash
+$ pip install fast-weight-attention
+```
+
+## Usage
+
+```python
+import torch
+from fast_weight_attention import FastWeightAttention
+
+mem = FastWeightAttention(512, causal = True)
+
+tokens = torch.randn(1, 64, 512)
+
+past_mem = None
+
+retrieved, next_mem = mem(tokens, past_mem = past_mem, return_next_memories = True)
+retrieved, next_mem = mem(tokens, past_mem = next_mem, return_next_memories = True)
+retrieved, next_mem = mem(tokens, past_mem = next_mem, return_next_memories = True)
+
+assert retrieved.shape == tokens.shape
+```
+
 ## Citations
 
 ```bibtex
@@ -27,10 +52,10 @@ An attention based fast weight episodic memory, in the same vein as the memory M
 
 ```bibtex
 @misc{jordan2024muon,
-    author       = {Keller Jordan and Yuchen Jin and Vlado Boza and Jiacheng You and Franz Cesista and Laker Newhouse and Jeremy Bernstein},
-    title        = {Muon: An optimizer for hidden layers in neural networks},
-    year         = {2024},
-    url          = {https://kellerjordan.github.io/posts/muon/}
+    author  = {Keller Jordan and Yuchen Jin and Vlado Boza and Jiacheng You and Franz Cesista and Laker Newhouse and Jeremy Bernstein},
+    title   = {Muon: An optimizer for hidden layers in neural networks},
+    year    = {2024},
+    url     = {https://kellerjordan.github.io/posts/muon/}
 }
 ```
 

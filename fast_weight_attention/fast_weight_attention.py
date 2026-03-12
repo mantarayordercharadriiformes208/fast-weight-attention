@@ -78,12 +78,15 @@ class FastWeightAttention(Module):
         self,
         dim,
         dim_head = 64,
+        dim_value_head = None,
         heads = 8,
         causal = True,
         max_learning_rate = 1e-2,
         muon_update = True
     ):
         super().__init__()
+
+        dim_value_head = default(dim_value_head, dim_head)
 
         self.norm = nn.RMSNorm(dim)
 
@@ -98,8 +101,8 @@ class FastWeightAttention(Module):
         self.attn_memory = ParameterDict(dict(
             wq = randn(heads, dim, dim_head),
             wk = randn(heads, dim, dim_head),
-            wv = randn(heads, dim, dim_head),
-            wo = randn(heads, dim_head, dim),
+            wv = randn(heads, dim, dim_value_head),
+            wo = randn(heads, dim_value_head, dim),
         ))
 
         self.memory_keys = self.attn_memory.keys()
@@ -135,7 +138,8 @@ class FastWeightAttention(Module):
         self,
         tokens,
         return_next_memories = False,
-        past_mem: AttentionMemory | None = None
+        past_mem: AttentionMemory | None = None,
+        detach_next_memories = False
     ):
         batch, scale = tokens.shape[0], self.scale
 
@@ -200,7 +204,6 @@ class FastWeightAttention(Module):
 
         dout = einsum(error, wo, 'b n d, b h dh d -> b h n dh')
 
-
         delta = reduce(dout * out, '... d -> ... 1', 'sum')
 
         dv = einsum(attn, dout, 'b h i j, b h i dh -> b h j dh')
@@ -225,5 +228,8 @@ class FastWeightAttention(Module):
 
         if exists(past_mem):
             next_fast_weights = add_memories(next_fast_weights, past_mem)
+
+        if detach_next_memories:
+            next_fast_weights = {k: v.detach() for k, v in next_fast_weights.items()}
 
         return pred_values, next_fast_weights
