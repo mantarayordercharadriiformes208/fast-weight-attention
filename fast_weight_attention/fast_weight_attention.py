@@ -102,7 +102,7 @@ class FastWeightAttention(Module):
 
         # get the memories
 
-        wq, wk, wv, wo = tuple(self.attn_memory[name] for name in ('wq', 'wk', 'wv', 'wo'))
+        wq, wk, wv, wo = tuple(memory[name] for name in ('wq', 'wk', 'wv', 'wo'))
 
         # attention
 
