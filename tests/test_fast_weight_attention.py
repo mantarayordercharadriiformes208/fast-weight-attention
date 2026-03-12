@@ -1,11 +1,15 @@
 import pytest
+param = pytest.mark.parametrize
 
-def test_mem():
+@param('causal', (False, True))
+def test_mem(
+    causal
+):
     import torch
 
     from fast_weight_attention import FastWeightAttention
 
-    mem = FastWeightAttention(512)
+    mem = FastWeightAttention(512, causal = causal)
 
     tokens = torch.randn(1, 64, 512)
 

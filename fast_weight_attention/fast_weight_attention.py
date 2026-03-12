@@ -68,13 +68,16 @@ class FastWeightAttention(Module):
         self,
         dim,
         dim_head = 64,
-        heads = 8
+        heads = 8,
+        causal = True
     ):
         super().__init__()
 
         # scale
 
         self.scale = dim_head ** -0.5
+
+        self.causal = causal
 
         # memory parameters
 
@@ -113,6 +116,11 @@ class FastWeightAttention(Module):
         q = q * self.scale
 
         sim = einsum(q, k, 'b h i dh, b h j dh -> b h i j')
+
+        if self.causal:
+            i, j = sim.shape[-2:]
+            causal_mask = torch.ones((i, j), device = sim.device, dtype = torch.bool).triu(j - i + 1)
+            sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
         attn = sim.softmax(dim = -1)
 
