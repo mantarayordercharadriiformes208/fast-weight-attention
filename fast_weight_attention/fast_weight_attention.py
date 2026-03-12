@@ -26,16 +26,6 @@ def default(v, d):
 def transpose(t):
     return t.transpose(-1, -2)
 
-# helper modules
-
-class Scale(Module):
-    def __init__(self, scale):
-        super().__init__()
-        self.scale = scale
-
-    def forward(self, t):
-        return t * self.scale
-
 # Muon related - Keller Jordan
 
 def newtonschulz5(
@@ -111,9 +101,10 @@ class FastWeightAttention(Module):
 
         self.to_learning_rate = Sequential(
             Linear(dim, 1, bias = False),
-            nn.Sigmoid(),
-            Scale(max_learning_rate)
+            nn.Sigmoid()
         )
+
+        self.max_learning_rate = max_learning_rate
 
         self.muon_update = muon_update
 
@@ -152,7 +143,7 @@ class FastWeightAttention(Module):
         memory = self.init_memories(batch)
 
         if exists(past_mem):
-            memory = {name: (memory[name] + past_mem[name]) for name in self.memory_keys}
+            memory = add_memories(memory, past_mem)
 
         # get the memories
 
@@ -196,7 +187,7 @@ class FastWeightAttention(Module):
 
         # mse error
 
-        learning_rate = self.to_learning_rate(tokens)
+        learning_rate = self.to_learning_rate(tokens) * self.max_learning_rate
 
         error = (target_values - pred_values_for_fast_weight) * learning_rate # flipped sign so no need to -grad at end
 

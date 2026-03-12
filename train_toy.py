@@ -4,7 +4,8 @@
 #     "fire",
 #     "fast-weight-attention",
 #     "torch",
-#     "tqdm"
+#     "tqdm",
+#     "x-mlps-pytorch"
 # ]
 # ///
 
@@ -17,6 +18,7 @@ from tqdm import tqdm
 from einops import rearrange
 
 from fast_weight_attention import FastWeightAttention
+from x_mlps_pytorch import Feedforwards
 
 # helpers
 
@@ -26,19 +28,6 @@ def exists(val):
 def default(val, d):
     return val if exists(val) else d
 
-class FeedForward(nn.Module):
-    def __init__(self, dim, mult = 4):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.RMSNorm(dim),
-            nn.Linear(dim, dim * mult),
-            nn.GELU(),
-            nn.Linear(dim * mult, dim)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
 # model
 
 class MemorizingModel(nn.Module):
@@ -47,7 +36,8 @@ class MemorizingModel(nn.Module):
         num_tokens,
         dim,
         depth = 1,
-        dim_value_head = 32
+        dim_value_head = 32,
+        causal = True
     ):
         super().__init__()
         self.embed = nn.Embedding(num_tokens, dim)
@@ -59,9 +49,9 @@ class MemorizingModel(nn.Module):
                     dim_head = 32,
                     dim_value_head = dim_value_head,
                     heads = 4,
-                    causal = True
+                    causal = causal
                 ),
-                FeedForward(dim)
+                Feedforwards(dim, depth = 1)
             ]) for _ in range(depth)
         ])
 
@@ -126,6 +116,7 @@ def train(
     dim = 64,
     depth = 1,
     dim_value_head = 32,
+    causal = True,
     half_len = 4,
     batch_size = 16,
     num_batches = 2500,
@@ -141,7 +132,7 @@ def train(
     for use_memory in (False, True):
         torch.manual_seed(seed)
 
-        model = MemorizingModel(num_tokens, dim, depth = depth, dim_value_head = dim_value_head)
+        model = MemorizingModel(num_tokens, dim, depth = depth, dim_value_head = dim_value_head, causal = causal)
         optim = Adam(model.parameters(), lr = lr)
 
         label = 'Memory' if use_memory else 'Baseline'
