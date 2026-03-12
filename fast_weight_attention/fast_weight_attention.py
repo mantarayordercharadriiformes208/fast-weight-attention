@@ -1,10 +1,22 @@
 from __future__ import annotations
+from collections import namedtuple
 
 import torch
-from torch.nn import Module, Linear
+from torch import randn, randint, tensor, is_tensor
+from torch.nn import Module, Linear, ParameterDict
 
-from einops import einsum
+import einx
+from einops import einsum, pack, unpack
 from einops.layers.torch import Rearrange
+
+# constants
+
+AttentionMemory = namedtuple('AttentionMemory', (
+    'wq', # (heads, dim, dim_head)
+    'wk', # (heads, dim, dim_head)
+    'wv', # (heads, dim, dim_head)
+    'wo'  # (heads, dim_head, dim)
+))
 
 # helpers
 
@@ -59,34 +71,53 @@ class FastWeightAttention(Module):
         heads = 8
     ):
         super().__init__()
+
+        # scale
+
         self.scale = dim_head ** -0.5
-        dim_inner = heads * dim_head
 
-        self.to_qk = Linear(dim, dim_inner * 2, bias = False)
-        self.to_v = Linear(dim, dim_inner, bias = False)
-        self.to_out = Linear(dim_inner, dim, bias = False)
+        # memory parameters
 
-        self.split_heads = Rearrange('b n (h d) -> b h n d', h = heads)
-        self.merge_heads = Rearrange('b h n d -> b n (h d)')
+        self.attn_memory = ParameterDict(dict(
+            wq = randn(heads, dim, dim_head),
+            wk = randn(heads, dim, dim_head),
+            wv = randn(heads, dim, dim_head),
+            wo = randn(heads, dim_head, dim),
+        ))
+
+        self.memory_keys = self.attn_memory.keys()
 
     def forward(
         self,
-        tokens
+        tokens,
+        return_next_memories = False,
+        past_mem: AttentionMemory | None = None
     ):
+        # add the fast weight memories 
 
-        q, k = self.to_qk(tokens).chunk(2, dim = -1)
-        v = self.to_v(tokens)
+        memory = self.attn_memory
 
-        q, k, v = tuple(self.split_heads(t) for t in (q, k, v))
+        if exists(past_mem):
+            memory = {(memory[name] + past_mem[name]) for name in self.memory_keys}
+
+        # get the memories
+
+        wq, wk, wv, wo = tuple(self.attn_memory[name] for name in ('wq', 'wk', 'wv', 'wo'))
+
+        # attention
+
+        q = einsum(tokens, wq, 'b n d, h d dh -> b h n dh')
+        k = einsum(tokens, wk, 'b n d, h d dh -> b h n dh')
+        v = einsum(tokens, wv, 'b n d, h d dh -> b h n dh')
 
         q = q * self.scale
 
-        sim = einsum(q, k, 'b h i d, b h j d -> b h i j')
+        sim = einsum(q, k, 'b h i dh, b h j dh -> b h i j')
 
         attn = sim.softmax(dim = -1)
 
-        out = einsum(attn, v, 'b h i j, b h j d -> b h i d')
+        aggregated = einsum(attn, v, 'b h i j, b h j dh -> b h i dh')
 
-        out = self.merge_heads(out)
-        return self.to_out(out)
+        retrieved = einsum(aggregated, wo, 'b h n dh, h dh d -> b n d')
 
+        return retrieved, None
