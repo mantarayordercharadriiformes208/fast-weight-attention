@@ -12,3 +12,24 @@ An attention based fast weight episodic memory, in the same vein as the memory M
     year    = {2026}
 }
 ```
+
+```bibtex
+@misc{zhao2026fastweightproductkeymemory,
+    title   = {Fast-weight Product Key Memory},
+    author  = {Tianyu Zhao and Llion Jones},
+    year    = {2026},
+    eprint  = {2601.00671},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CL},
+    url     = {https://arxiv.org/abs/2601.00671},
+}
+```
+
+```bibtex
+@misc{jordan2024muon,
+    author       = {Keller Jordan and Yuchen Jin and Vlado Boza and Jiacheng You and Franz Cesista and Laker Newhouse and Jeremy Bernstein},
+    title        = {Muon: An optimizer for hidden layers in neural networks},
+    year         = {2024},
+    url          = {https://kellerjordan.github.io/posts/muon/}
+}
+```
