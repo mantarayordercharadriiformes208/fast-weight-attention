@@ -200,7 +200,6 @@ class FastWeightAttention(Module):
 
         dout = einsum(error, wo, 'b n d, b h dh d -> b h n dh')
 
-        dwo = einsum(error, out, 'b n d, b h n dh -> h dh d')
 
         delta = reduce(dout * out, '... d -> ... 1', 'sum')
 
@@ -213,9 +212,10 @@ class FastWeightAttention(Module):
         dq = einsum(k, dscore, 'b h j dh, b h i j -> b h i dh')
         dk = einsum(q, dscore, 'b h i dh, b h i j -> b h j dh')
 
-        dwq = einsum(dq, tokens, 'b h i dh, b i d -> h d dh')
-        dwk = einsum(dk, tokens, 'b h j dh , b j d -> h d dh')
-        dwv = einsum(dv, tokens, 'b h j dh , b j d -> h d dh')
+        dwq = einsum(dq, tokens, 'b h i dh, b i d -> b h d dh')
+        dwk = einsum(dk, tokens, 'b h j dh , b j d -> b h d dh')
+        dwv = einsum(dv, tokens, 'b h j dh , b j d -> b h d dh')
+        dwo = einsum(error, out, 'b n d, b h n dh -> b h dh d')
 
         if self.muon_update:
             dwv = newtonschulz5(dwv)
