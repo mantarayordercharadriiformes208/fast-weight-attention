@@ -1,22 +1,19 @@
 from __future__ import annotations
-from collections import namedtuple
 
 import torch
-from torch import nn, randn, randint, tensor, is_tensor
+from torch import nn, randn
 from torch.nn import Module, Linear, ParameterDict, Sequential
 
-import einx
-from einops import einsum, rearrange, repeat, reduce, pack, unpack
+from einops import einsum, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
 # constants
 
-AttentionMemory = namedtuple('AttentionMemory', (
-    'wq', # (heads, dim, dim_head)
-    'wk', # (heads, dim, dim_head)
-    'wv', # (heads, dim, dim_head)
-    'wo'  # (heads, dim_head, dim)
-))
+def AttentionMemory(*, wq, wk, wv, wo):
+    return dict(wq = wq, wk = wk, wv = wv, wo = wo)
+
+def add_memories(mem1, mem2):
+    return {k: mem1[k] + mem2[k] for k in mem1.keys()}
 
 # helpers
 
@@ -110,7 +107,7 @@ class FastWeightAttention(Module):
         # to optimizer related
 
         self.to_learning_rate = Sequential(
-            nn.Linear(dim, 1, bias = False),
+            Linear(dim, 1, bias = False),
             nn.Sigmoid(),
             Scale(max_learning_rate)
         )
@@ -121,12 +118,12 @@ class FastWeightAttention(Module):
         # using the z-score as well as the gating as done for fast-weight PKM proposed by Sakana AI
 
         self.to_target_values = Sequential(
-            nn.Linear(dim, dim, bias = False),
+            Linear(dim, dim, bias = False),
             nn.LayerNorm(dim, elementwise_affine = False)
         )
 
         self.to_gates = Sequential(
-            nn.Linear(dim, heads, bias = False),
+            Linear(dim, heads, bias = False),
             Rearrange('... n h -> ... h n 1'),
             nn.Sigmoid()
         )
@@ -224,8 +221,9 @@ class FastWeightAttention(Module):
             dwv = newtonschulz5(dwv)
             dwo = newtonschulz5(dwo)
 
-        # returning
-
         next_fast_weights = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo)
+
+        if exists(past_mem):
+            next_fast_weights = add_memories(next_fast_weights, past_mem)
 
         return pred_values, next_fast_weights
