@@ -26,40 +26,8 @@ def default(v, d):
 def transpose(t):
     return t.transpose(-1, -2)
 
-# Muon related - Keller Jordan
-
-def newtonschulz5(
-    t,
-    steps = 5,
-    eps = 1e-7,
-    coefs = (3.4445, -4.7750, 2.0315)
-):
-
-    if t.ndim < 2:
-        return t
-
-    shape = t.shape
-    should_transpose = shape[-2] > shape[-1]
-
-    if should_transpose:
-        t = transpose(t)
-
-    t, packed_shape = pack([t], '* i j')
-    t = t / t.norm(dim = (-1, -2), keepdim = True).clamp(min = eps)
-
-    a, b, c = coefs
-
-    for _ in range(steps):
-        A = t @ transpose(t)
-        B = b * A + c * A @ A
-        t = a * t + B @ t
-
-    t, = unpack(t, packed_shape, '* i j')
-
-    if should_transpose:
-        t = transpose(t)
-
-    return t
+from adam_atan2_pytorch.muon_adam_atan2 import newtonschulz5
+from adam_atan2_pytorch.polar_adam_atan2 import polar_express
 
 # classes
 
@@ -72,7 +40,8 @@ class FastWeightAttention(Module):
         heads = 8,
         causal = True,
         max_learning_rate = 1e-2,
-        muon_update = True
+        muon_update = True,
+        use_polar_express = False
     ):
         super().__init__()
 
@@ -107,6 +76,7 @@ class FastWeightAttention(Module):
         self.max_learning_rate = max_learning_rate
 
         self.muon_update = muon_update
+        self.use_polar_express = use_polar_express
 
         # target values
         # using the z-score as well as the gating as done for fast-weight PKM proposed by Sakana AI
@@ -212,8 +182,9 @@ class FastWeightAttention(Module):
         dwo = einsum(error, out, 'b n d, b h n dh -> b h dh d')
 
         if self.muon_update:
-            dwv = newtonschulz5(dwv)
-            dwo = newtonschulz5(dwo)
+            update_fn = polar_express if self.use_polar_express else newtonschulz5
+            dwv = update_fn(dwv)
+            dwo = update_fn(dwo)
 
         next_fast_weights = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo)
 

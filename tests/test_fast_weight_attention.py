@@ -2,14 +2,21 @@ import pytest
 param = pytest.mark.parametrize
 
 @param('causal', (False, True))
+@param('muon_update,use_polar_express', [
+    (False, False),
+    (True, False),
+    (True, True)
+])
 def test_mem(
-    causal
+    causal,
+    muon_update,
+    use_polar_express
 ):
     import torch
 
     from fast_weight_attention import FastWeightAttention
 
-    mem = FastWeightAttention(512, causal = causal)
+    mem = FastWeightAttention(512, causal = causal, muon_update = muon_update, use_polar_express = use_polar_express)
 
     tokens = torch.randn(1, 64, 512)
 
