@@ -7,6 +7,9 @@ from torch.nn import Module, Linear, ParameterDict, Sequential
 from einops import einsum, repeat, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
+from adam_atan2_pytorch.muon_adam_atan2 import newtonschulz5
+from adam_atan2_pytorch.polar_adam_atan2 import polar_express
+
 # constants
 
 def AttentionMemory(*, wq, wk, wv, wo):
@@ -22,12 +25,6 @@ def exists(v):
 
 def default(v, d):
     return v if exists(v) else d
-
-def transpose(t):
-    return t.transpose(-1, -2)
-
-from adam_atan2_pytorch.muon_adam_atan2 import newtonschulz5
-from adam_atan2_pytorch.polar_adam_atan2 import polar_express
 
 # classes
 
