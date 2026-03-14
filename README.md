@@ -27,6 +27,25 @@ retrieved, next_mem = mem(tokens, past_mem = next_mem, return_next_memories = Tr
 assert retrieved.shape == tokens.shape
 ```
 
+With chunked processing (automatically segments the sequence and carries memory across chunks):
+
+```python
+import torch
+from fast_weight_attention import ChunkedFastWeightAttention
+
+mem = ChunkedFastWeightAttention(
+    512,
+    causal = True,
+    chunk_size = 64   # process 64 tokens at a time, carrying fast weight memories across chunks
+)
+
+tokens = torch.randn(1, 512, 512)
+
+retrieved, next_mem = mem(tokens, return_next_memories = True)
+
+assert retrieved.shape == tokens.shape
+```
+
 ## Citations
 
 ```bibtex

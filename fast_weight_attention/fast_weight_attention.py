@@ -2,7 +2,8 @@ from __future__ import annotations
 from functools import partial
 
 import torch
-from torch import nn, randn
+import torch.nn.functional as F
+from torch import cat, nn, randn
 from torch.nn import Module, Linear, ParameterDict, Sequential
 
 from einx import multiply
@@ -59,12 +60,17 @@ class FastWeightAttention(Module):
 
         # memory parameters
 
-        self.attn_memory = ParameterDict(dict(
-            wq = randn(heads, dim, dim_head),
-            wk = randn(heads, dim, dim_head),
-            wv = randn(heads, dim, dim_value_head),
-            wo = randn(heads, dim_value_head, dim),
-        ))
+        shapes = dict(
+            wq = (heads, dim, dim_head),
+            wk = (heads, dim, dim_head),
+            wv = (heads, dim, dim_value_head),
+            wo = (heads, dim_value_head, dim)
+        )
+
+        self.attn_memory = ParameterDict({
+            name: randn(shape) * (shape[-1] ** -0.5)
+            for name, shape in shapes.items()
+        })
 
         self.memory_keys = self.attn_memory.keys()
 
@@ -106,7 +112,9 @@ class FastWeightAttention(Module):
         tokens,
         return_next_memories = False,
         past_mem: AttentionMemory | None = None,
-        detach_next_memories = False
+        detach_next_memories = False,
+        boundary_state: tuple | None = None,
+        return_boundary_state = False
     ):
         batch, scale, muon_update = tokens.shape[0], self.scale, self.muon_update
 
@@ -152,19 +160,48 @@ class FastWeightAttention(Module):
 
         target_values = self.to_target_values(tokens[..., 1:, :])
 
-        # some slicing so subsequent backwards pass is readable
+        # extract boundary state for the next chunk before slicing
+
+        next_boundary_state = (
+            tokens[..., -1:, :],
+            pred_values[..., -1:, :],
+            out[..., -1:, :],
+            gates[..., -1:, :],
+            q[..., -1:, :],
+            k[..., -1:, :],
+            v[..., -1:, :]
+        )
+
+        # Base slicing for backwards pass
 
         tokens = tokens[..., :-1, :]
-
         pred_values_for_fast_weight = pred_values[..., :-1, :]
-
         out = out[..., :-1, :]
-
         gates = gates[..., :-1, :]
-
-        attn = attn[..., :-1, :-1]
-
+        attn_sliced = attn[..., :-1, :-1]
         q, k, v = q[..., :-1, :], k[..., :-1, :], v[..., :-1, :]
+
+        if exists(boundary_state):
+            b_tokens, b_pred_values, b_out, b_gates, b_q, b_k, b_v = boundary_state
+
+            boundary_target = self.to_target_values(tokens[..., :1, :])
+            target_values = cat((boundary_target, target_values), dim = -2)
+
+            # cleanly concat boundary state to the rest of the tensors
+
+            tokens, pred_values_for_fast_weight, out, gates, q, k, v = tuple(
+                cat((b_t, t), dim = -2) for b_t, t in zip(
+                    (b_tokens, b_pred_values, b_out, b_gates, b_q, b_k, b_v),
+                    (tokens, pred_values_for_fast_weight, out, gates, q, k, v)
+                )
+            )
+
+            # pad attention matrix dynamically for the boundary token
+
+            attn = F.pad(attn_sliced, (1, 0, 1, 0), value = 0.)
+            attn[..., 0, 0] = 1.
+        else:
+            attn = attn_sliced
 
         # per token learning rate related
 
@@ -179,6 +216,9 @@ class FastWeightAttention(Module):
         # flipped sign so no need to -grad at end
 
         error = (target_values - pred_values_for_fast_weight)
+
+        if not muon_update:
+            error = error * rearrange(learning_rate, '... -> ... 1')
 
         # now go through the backwards pass of attention, using predicted loss to next target value (Sakana AI discovery)
 
@@ -204,9 +244,9 @@ class FastWeightAttention(Module):
             tokens_for_dwv = multiply('b n d, b n', tokens, muon_learning_rate)
             out_for_dwo = multiply('b h n d, b n', out, muon_learning_rate)
         else:
-            tokens_for_dwqk = tokens
-            tokens_for_dwv = tokens
-            out_for_dwo = out
+            tokens_for_dwqk = multiply('b n d, b n', tokens, learning_rate)
+            tokens_for_dwv = multiply('b n d, b n', tokens, learning_rate)
+            out_for_dwo = multiply('b h n d, b n', out, learning_rate)
 
         # get the next memories
 
@@ -216,7 +256,8 @@ class FastWeightAttention(Module):
         dwo = einsum(error, out_for_dwo, 'b n d, b h n dh -> b h dh d')
 
         if muon_update:
-            update_fn = polar_express if self.use_polar_express else newtonschulz5
+            update_fn = partial(polar_express if self.use_polar_express else newtonschulz5, bypass_update_fn = lambda ndim: False)
+
             dwv = update_fn(dwv)
             dwo = update_fn(dwo)
 
@@ -230,4 +271,7 @@ class FastWeightAttention(Module):
         if detach_next_memories:
             next_mems = {k: v.detach() for k, v in next_mems.items()}
 
-        return pred_values, next_mems
+        if not return_boundary_state:
+            return pred_values, next_mems
+
+        return pred_values, next_mems, next_boundary_state
