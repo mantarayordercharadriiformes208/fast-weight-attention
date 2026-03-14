@@ -1,16 +1,20 @@
 from __future__ import annotations
+from functools import partial
 
 import torch
 from torch import nn, randn
 from torch.nn import Module, Linear, ParameterDict, Sequential
 
-from einops import einsum, repeat, reduce, pack, unpack
+from einx import multiply
+from einops import einsum, repeat, rearrange, reduce, pack, unpack
 from einops.layers.torch import Rearrange
 
 from adam_atan2_pytorch.muon_adam_atan2 import newtonschulz5
 from adam_atan2_pytorch.polar_adam_atan2 import polar_express
 
 # constants
+
+LinearNoBias = partial(Linear, bias = False)
 
 def AttentionMemory(*, wq, wk, wv, wo):
     return dict(wq = wq, wk = wk, wv = wv, wo = wo)
@@ -37,6 +41,7 @@ class FastWeightAttention(Module):
         heads = 8,
         causal = True,
         max_learning_rate = 1e-2,
+        max_muon_learning_rate = 1e-1,
         muon_update = True,
         use_polar_express = False
     ):
@@ -66,25 +71,29 @@ class FastWeightAttention(Module):
         # to optimizer related
 
         self.to_learning_rate = Sequential(
-            Linear(dim, 1, bias = False),
+            LinearNoBias(dim, 2 if muon_update else 1),
             nn.Sigmoid()
         )
 
         self.max_learning_rate = max_learning_rate
 
+        # muon related
+
         self.muon_update = muon_update
         self.use_polar_express = use_polar_express
+
+        self.max_muon_learning_rate = max_muon_learning_rate
 
         # target values
         # using the z-score as well as the gating as done for fast-weight PKM proposed by Sakana AI
 
         self.to_target_values = Sequential(
-            Linear(dim, dim, bias = False),
+            LinearNoBias(dim, dim),
             nn.LayerNorm(dim, elementwise_affine = False)
         )
 
         self.to_gates = Sequential(
-            Linear(dim, heads, bias = False),
+            LinearNoBias(dim, heads),
             Rearrange('... n h -> ... h n 1'),
             nn.Sigmoid()
         )
@@ -99,7 +108,7 @@ class FastWeightAttention(Module):
         past_mem: AttentionMemory | None = None,
         detach_next_memories = False
     ):
-        batch, scale = tokens.shape[0], self.scale
+        batch, scale, muon_update = tokens.shape[0], self.scale, self.muon_update
 
         # prenorm
 
@@ -152,11 +161,19 @@ class FastWeightAttention(Module):
 
         q, k, v = q[..., :-1, :], k[..., :-1, :], v[..., :-1, :]
 
-        # mse error
+        # per token learning rate related
 
         learning_rate = self.to_learning_rate(tokens) * self.max_learning_rate
 
-        error = (target_values - pred_values_for_fast_weight) * learning_rate # flipped sign so no need to -grad at end
+        if muon_update:
+            learning_rate, muon_learning_rate = learning_rate.unbind(dim = -1)
+        else:
+            learning_rate = rearrange(learning_rate, '... 1 -> ...')
+
+        # mse error
+        # flipped sign so no need to -grad at end
+
+        error = (target_values - pred_values_for_fast_weight)
 
         # now go through the backwards pass of attention, using predicted loss to next target value (Sakana AI discovery)
 
@@ -173,22 +190,37 @@ class FastWeightAttention(Module):
         dq = einsum(k, dscore, 'b h j dh, b h i j -> b h i dh')
         dk = einsum(q, dscore, 'b h i dh, b h i j -> b h j dh')
 
-        dwq = einsum(dq, tokens, 'b h i dh, b i d -> b h d dh')
-        dwk = einsum(dk, tokens, 'b h j dh , b j d -> b h d dh')
-        dwv = einsum(dv, tokens, 'b h j dh , b j d -> b h d dh')
-        dwo = einsum(error, out, 'b n d, b h n dh -> b h dh d')
+        # apply learning rates
 
-        if self.muon_update:
+        if muon_update:
+            tokens_for_dwqk = multiply('b n d, b n', tokens, learning_rate)
+            tokens_for_dwv = multiply('b n d, b n', tokens, muon_learning_rate)
+            out_for_dwo = multiply('b h n d, b n', out, muon_learning_rate)
+        else:
+            tokens_for_dwqk = tokens
+            tokens_for_dwv = tokens
+            out_for_dwo = out
+
+        # get the next memories
+
+        dwq = einsum(dq, tokens_for_dwqk, 'b h i dh, b i d -> b h d dh')
+        dwk = einsum(dk, tokens_for_dwqk, 'b h j dh , b j d -> b h d dh')
+        dwv = einsum(dv, tokens_for_dwv, 'b h j dh , b j d -> b h d dh')
+        dwo = einsum(error, out_for_dwo, 'b n d, b h n dh -> b h dh d')
+
+        if muon_update:
             update_fn = polar_express if self.use_polar_express else newtonschulz5
             dwv = update_fn(dwv)
             dwo = update_fn(dwo)
 
-        next_fast_weights = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo)
+        # prep next memories
+
+        next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo)
 
         if exists(past_mem):
-            next_fast_weights = add_memories(next_fast_weights, past_mem)
+            next_mems = add_memories(next_mems, past_mem)
 
         if detach_next_memories:
-            next_fast_weights = {k: v.detach() for k, v in next_fast_weights.items()}
+            next_mems = {k: v.detach() for k, v in next_mems.items()}
 
-        return pred_values, next_fast_weights
+        return pred_values, next_mems
