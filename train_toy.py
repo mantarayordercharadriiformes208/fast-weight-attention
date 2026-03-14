@@ -117,7 +117,7 @@ def train(
     memory_only = False,
     muon_update = True,
     use_polar_express = True,
-    max_learning_rate = 1e-1,
+    max_learning_rate = 1e-3,
     use_forget_gate = False
 ):
     assert chunk_size <= half_len, 'chunk size must be less than or equal to half sequence length'

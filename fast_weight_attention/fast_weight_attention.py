@@ -3,7 +3,7 @@ from functools import partial
 
 import torch
 import torch.nn.functional as F
-from torch import cat, nn, randn
+from torch import cat, nn, randn, tensor
 from torch.nn import Module, Linear, ParameterDict, Sequential
 
 from einx import multiply
@@ -81,17 +81,19 @@ class FastWeightAttention(Module):
             nn.Sigmoid()
         )
 
-        self.max_learning_rate = max_learning_rate
-
         # muon related
 
         self.muon_update = muon_update
         self.use_polar_express = use_polar_express
 
-        self.max_muon_learning_rate = max_muon_learning_rate
+        if muon_update:
+            self.muon_update_fn = partial(polar_express if self.use_polar_express else newtonschulz5, bypass_update_fn = lambda ndim: False)
+
+        lr_scales = tensor([max_learning_rate, max_muon_learning_rate]) if muon_update else tensor([max_learning_rate])
+        self.register_buffer('lr_scales', lr_scales, persistent = False)
 
         # target values
-        # using the z-score as done for fast-weight PKM proposed by Sakana AI
+        # using the z-score as well as done for fast-weight PKM proposed by Sakana AI
 
         self.to_target_values = Sequential(
             LinearNoBias(dim, dim),
@@ -207,19 +209,17 @@ class FastWeightAttention(Module):
 
         # per token learning rate related
 
-        learning_rates = self.to_learning_rate(tokens)
+        learning_rates = self.to_learning_rate(tokens) * self.lr_scales
 
         if muon_update:
             learning_rate, muon_learning_rate = learning_rates.unbind(dim = -1)
-            learning_rate = learning_rate * self.max_learning_rate
-            muon_learning_rate = muon_learning_rate * self.max_muon_learning_rate
         else:
-            learning_rate = rearrange(learning_rates, '... 1 -> ...') * self.max_learning_rate
+            learning_rate = rearrange(learning_rates, '... 1 -> ...')
 
         # mse error
         # flipped sign so no need to -grad at end
 
-        error = (target_values - pred_values_for_fast_weight)
+        error = target_values - pred_values_for_fast_weight
 
         if not muon_update:
             error = error * rearrange(learning_rate, '... -> ... 1')
@@ -248,9 +248,9 @@ class FastWeightAttention(Module):
             tokens_for_dwv = multiply('b n d, b n', tokens, muon_learning_rate)
             out_for_dwo = multiply('b h n d, b n', out, muon_learning_rate)
         else:
-            tokens_for_dwqk = multiply('b n d, b n', tokens, learning_rate)
-            tokens_for_dwv = multiply('b n d, b n', tokens, learning_rate)
-            out_for_dwo = multiply('b h n d, b n', out, learning_rate)
+            tokens_for_dwqk = tokens
+            tokens_for_dwv = tokens
+            out_for_dwo = out
 
         # get the next memories
 
@@ -260,10 +260,8 @@ class FastWeightAttention(Module):
         dwo = einsum(error, out_for_dwo, 'b n d, b h n dh -> b h dh d')
 
         if muon_update:
-            update_fn = partial(polar_express if self.use_polar_express else newtonschulz5, bypass_update_fn = lambda ndim: False)
-
-            dwv = update_fn(dwv)
-            dwo = update_fn(dwo)
+            dwv = self.muon_update_fn(dwv)
+            dwo = self.muon_update_fn(dwo)
 
         # prep next memories
 
