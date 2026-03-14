@@ -205,12 +205,14 @@ class FastWeightAttention(Module):
 
         # per token learning rate related
 
-        learning_rate = self.to_learning_rate(tokens) * self.max_learning_rate
+        learning_rates = self.to_learning_rate(tokens)
 
         if muon_update:
-            learning_rate, muon_learning_rate = learning_rate.unbind(dim = -1)
+            learning_rate, muon_learning_rate = learning_rates.unbind(dim = -1)
+            learning_rate = learning_rate * self.max_learning_rate
+            muon_learning_rate = muon_learning_rate * self.max_muon_learning_rate
         else:
-            learning_rate = rearrange(learning_rate, '... 1 -> ...')
+            learning_rate = rearrange(learning_rates, '... 1 -> ...') * self.max_learning_rate
 
         # mse error
         # flipped sign so no need to -grad at end
