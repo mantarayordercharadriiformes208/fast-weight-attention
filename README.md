@@ -1,6 +1,6 @@
 ## Fast Weight Attention
 
-An attention based fast weight episodic memory, in the same vein as the memory MLP from TTT / Titans and fast weight PKM from Sakana AI
+An attention based fast weight episodic memory, in the same vein as the memory MLP from TTT / [Titans](https://codeberg.org/lucidrains/titans-pytorch) and [fast weight PKM](https://codeberg.org/lucidrains/fast-weight-product-key-memory) from Sakana AI
 
 ## Install
 
