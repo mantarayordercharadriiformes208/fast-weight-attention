@@ -113,6 +113,7 @@ class FastWeightAttention(Module):
         # prenorm
 
         tokens = self.norm(tokens)
+        gates = self.to_gates(tokens)
 
         # add the fast weight memories
 
@@ -142,6 +143,8 @@ class FastWeightAttention(Module):
 
         out = einsum(attn, v, 'b h i j, b h j dh -> b h i dh')
 
+        out = out * gates
+
         pred_values = einsum(out, wo, 'b h n dh, b h dh d -> b n d')
 
         if not return_next_memories:
@@ -156,6 +159,8 @@ class FastWeightAttention(Module):
         pred_values_for_fast_weight = pred_values[..., :-1, :]
 
         out = out[..., :-1, :]
+
+        gates = gates[..., :-1, :]
 
         attn = attn[..., :-1, :-1]
 
@@ -179,11 +184,13 @@ class FastWeightAttention(Module):
 
         dout = einsum(error, wo, 'b n d, b h dh d -> b h n dh')
 
+        du = dout * gates
+
         delta = reduce(dout * out, '... d -> ... 1', 'sum')
 
-        dv = einsum(attn, dout, 'b h i j, b h i dh -> b h j dh')
+        dv = einsum(attn, du, 'b h i j, b h i dh -> b h j dh')
 
-        dattn = einsum(v, dout, 'b h j dh, b h i dh -> b h i j')
+        dattn = einsum(v, du, 'b h j dh, b h i dh -> b h i j')
 
         dscore = scale * attn * (dattn - delta)
 
