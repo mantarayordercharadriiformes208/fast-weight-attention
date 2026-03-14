@@ -91,12 +91,14 @@ class FastWeightAttention(Module):
         self.max_muon_learning_rate = max_muon_learning_rate
 
         # target values
-        # using the z-score as well as the gating as done for fast-weight PKM proposed by Sakana AI
+        # using the z-score as done for fast-weight PKM proposed by Sakana AI
 
         self.to_target_values = Sequential(
             LinearNoBias(dim, dim),
             nn.LayerNorm(dim, elementwise_affine = False)
         )
+
+        # attending to nothing
 
         self.to_gates = Sequential(
             LinearNoBias(dim, heads),
@@ -172,7 +174,7 @@ class FastWeightAttention(Module):
             v[..., -1:, :]
         )
 
-        # Base slicing for backwards pass
+        # base slicing for backwards pass
 
         tokens = tokens[..., :-1, :]
         pred_values_for_fast_weight = pred_values[..., :-1, :]
