@@ -116,7 +116,6 @@ def train(
     half_len = 8,
     eval_batches = 50,
     eval_every = 100,
-    memory_only = False,
     muon_update = True,
     use_polar_express = True,
     max_learning_rate = 1e-3,
@@ -174,9 +173,10 @@ def train(
             half = torch.randint(0, num_tokens, (batch_size, half_len))
             seq = torch.cat((half, half), dim = -1)
 
-            x, labels = seq[:, :-1], seq[:, 1:]
+            labels = seq[:, 1:]
 
-            preds, _ = model(x, return_next_memories = True)
+            preds, _ = model(seq, return_next_memories = True)
+            preds = preds[:, :-1]
 
             loss = F.cross_entropy(
                 rearrange(preds, 'b n d -> (b n) d'),
@@ -207,9 +207,10 @@ def train(
             if i % eval_every == 0 or i >= (num_batches - eval_batches):
                 model.eval()
                 with torch.no_grad():
-                    all_preds, _ = model(x, return_next_memories = True)
+                    all_preds, _ = model(seq, return_next_memories = True)
+                    all_preds = all_preds[:, :-1]
                     preds_class = all_preds.argmax(dim = -1)
-                    acc = (preds_class[:, half_len:] == labels[:, half_len:]).float().mean()
+                    acc = (preds_class[:, (half_len - 1):] == labels[:, (half_len - 1):]).float().mean()
 
                     if i >= (num_batches - eval_batches):
                         last_accs.append(acc.item())
