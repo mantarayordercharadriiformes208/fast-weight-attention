@@ -28,6 +28,7 @@ class ChunkingState(NamedTuple):
     last_token: Tensor | None = None
     token_count: int = 0
     boundary_state: Any = None
+    buffer: Tensor | None = None
 
 # main class
 
@@ -42,6 +43,8 @@ class ChunkManager(Module):
         self.net = net
         self.chunk_size = chunk_size
         self.use_forget_gate = use_forget_gate
+
+        assert not exists(chunk_size) or chunk_size >= 2, 'chunk size must be at least 2'
 
         if use_forget_gate:
             heads, dim, _ = net.attn_memory['wq'].shape
@@ -66,16 +69,15 @@ class ChunkManager(Module):
     ):
         past_mem = default(past_mem, ChunkingState())
 
+        if exists(past_mem.buffer):
+            tokens = cat((past_mem.buffer, tokens), dim=-2)
+
         seq_len = tokens.shape[-2]
         chunk_size = default(self.chunk_size, seq_len)
 
-        count = past_mem.token_count
+        num_chunks, chunk_remainder = divmod(seq_len, chunk_size)
 
-        to_bound = chunk_size - (count % chunk_size)
-        remainder = max(0, seq_len - to_bound)
-        num_chunks, chunk_remainder = divmod(remainder, chunk_size)
-
-        split_sizes = (min(seq_len, to_bound), *([chunk_size] * num_chunks), chunk_remainder)
+        split_sizes = (*([chunk_size] * num_chunks), chunk_remainder)
         split_sizes = tuple(filter(lambda n: n > 0, split_sizes))
         segments = tokens.split(split_sizes, dim = -2)
 
@@ -85,6 +87,16 @@ class ChunkManager(Module):
             should_detach = exists(detach_next_memories_every) and divisible_by(chunk_index + 1, detach_next_memories_every)
 
             segment_len = segment.shape[-2]
+
+            if segment_len < chunk_size:
+                past_mem = ChunkingState(
+                    memory = past_mem.memory,
+                    last_token = past_mem.last_token,
+                    token_count = past_mem.token_count,
+                    boundary_state = past_mem.boundary_state,
+                    buffer = segment
+                )
+                continue
 
             past_memory = None
             if exists(past_mem.memory) and not ablate_mem:
@@ -111,10 +123,14 @@ class ChunkManager(Module):
                 memory = next_mem,
                 last_token = None,
                 token_count = past_mem.token_count + segment_len,
-                boundary_state = next_boundary_state
+                boundary_state = next_boundary_state,
+                buffer = None
             )
 
             out_list.append(out)
+
+        if len(out_list) == 0:
+            return None, past_mem
 
         res = cat(out_list, dim = -2)
 
