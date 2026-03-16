@@ -48,7 +48,8 @@ class MemorizingModel(nn.Module):
         use_polar_express = False,
         max_learning_rate = 1e-2,
         chunk_size = 4,
-        use_forget_gate = True
+        use_forget_gate = True,
+        use_gates = True
     ):
         super().__init__()
         self.embed = nn.Embedding(num_tokens, dim)
@@ -64,7 +65,8 @@ class MemorizingModel(nn.Module):
                         causal = causal,
                         muon_update = muon_update,
                         use_polar_express = use_polar_express,
-                        max_learning_rate = max_learning_rate
+                        max_learning_rate = max_learning_rate,
+                        use_gates = use_gates
                     ),
                     chunk_size = chunk_size,
                     use_forget_gate = use_forget_gate
@@ -118,7 +120,8 @@ def train(
     muon_update = True,
     use_polar_express = True,
     max_learning_rate = 1e-3,
-    use_forget_gate = False
+    use_forget_gate = False,
+    single_run = False
 ):
     assert chunk_size <= half_len, 'chunk size must be less than or equal to half sequence length'
 
@@ -143,9 +146,9 @@ def train(
 
     results = dict()
 
-    conditions = (True,) if memory_only else (True, False)
+    conditions = (True,) if single_run else (True, False)
 
-    for use_memory in conditions:
+    for use_gates in conditions:
         torch.manual_seed(seed)
 
         model = MemorizingModel(
@@ -156,11 +159,12 @@ def train(
             use_polar_express = use_polar_express,
             max_learning_rate = max_learning_rate,
             chunk_size = chunk_size,
-            use_forget_gate = use_forget_gate
+            use_forget_gate = use_forget_gate,
+            use_gates = use_gates
         )
         optim = Adam(model.parameters(), lr = lr)
 
-        label = 'Memory' if use_memory else 'Baseline'
+        label = 'Gates' if use_gates else 'No_Gates'
         pbar = tqdm(range(num_batches), desc = label)
         last_accs = []
 
@@ -172,7 +176,7 @@ def train(
 
             x, labels = seq[:, :-1], seq[:, 1:]
 
-            preds, _ = model(x, return_next_memories = True, ablate_mem = not use_memory)
+            preds, _ = model(x, return_next_memories = True)
 
             loss = F.cross_entropy(
                 rearrange(preds, 'b n d -> (b n) d'),
@@ -203,7 +207,7 @@ def train(
             if i % eval_every == 0 or i >= (num_batches - eval_batches):
                 model.eval()
                 with torch.no_grad():
-                    all_preds, _ = model(x, return_next_memories = True, ablate_mem = not use_memory)
+                    all_preds, _ = model(x, return_next_memories = True)
                     preds_class = all_preds.argmax(dim = -1)
                     acc = (preds_class[:, half_len:] == labels[:, half_len:]).float().mean()
 
@@ -222,14 +226,16 @@ def train(
         print(f'  {label}: {acc:.1%}')
     print_header()
 
-    if not memory_only and 'Baseline' in results:
-        memory_acc = results['Memory']
-        baseline_acc = results['Baseline']
-        advantage = memory_acc - baseline_acc
-        if advantage > 0.20:
-            print(colored(f'\n  Memory advantage confirmed.', 'green', attrs=['bold']))
+    if not single_run and 'No_Gates' in results:
+        gates_acc = results['Gates']
+        no_gates_acc = results['No_Gates']
+        advantage = gates_acc - no_gates_acc
+        if advantage > 0.10:
+            print(colored(f'\n  Gates advantage confirmed.', 'green', attrs=['bold']))
+        elif advantage < -0.10:
+            print(colored(f'\n  No_Gates was actually better.', 'red', attrs=['bold']))
         else:
-            print(colored(f'\n  No clear advantage.', 'red', attrs=['bold']))
+            print(colored(f'\n  No significant advantage either way.', 'yellow', attrs=['bold']))
 
 if __name__ == '__main__':
     fire.Fire(train)

@@ -17,8 +17,9 @@ from adam_atan2_pytorch.polar_adam_atan2 import polar_express
 
 LinearNoBias = partial(Linear, bias = False)
 
-def AttentionMemory(*, wq, wk, wv, wo):
-    return dict(wq = wq, wk = wk, wv = wv, wo = wo)
+
+def AttentionMemory(*, wq, wk, wv, wo, wg = None):
+    return remove_none_values(dict(wq = wq, wk = wk, wv = wv, wo = wo, wg = wg))
 
 def add_memories(mem1, mem2):
     return {k: mem1[k] + mem2[k] for k in mem1.keys()}
@@ -30,6 +31,9 @@ def exists(v):
 
 def default(v, d):
     return v if exists(v) else d
+
+def remove_none_values(d):
+    return {k: v for k, v in d.items() if exists(v)}
 
 # classes
 
@@ -44,9 +48,12 @@ class FastWeightAttention(Module):
         max_learning_rate = 1e-2,
         max_muon_learning_rate = 1e-1,
         muon_update = True,
-        use_polar_express = False
+        use_polar_express = False,
+        use_gates = True
     ):
         super().__init__()
+
+        self.use_gates = use_gates
 
         dim_value_head = default(dim_value_head, dim_head)
 
@@ -66,6 +73,9 @@ class FastWeightAttention(Module):
             wv = (heads, dim, dim_value_head),
             wo = (heads, dim_value_head, dim)
         )
+
+        if self.use_gates:
+            shapes['wg'] = (heads, dim, dim_value_head)
 
         self.attn_memory = ParameterDict({
             name: randn(shape) * (shape[-1] ** -0.5)
@@ -100,14 +110,6 @@ class FastWeightAttention(Module):
             nn.LayerNorm(dim, elementwise_affine = False)
         )
 
-        # attending to nothing
-
-        self.to_gates = Sequential(
-            LinearNoBias(dim, heads),
-            Rearrange('... n h -> ... h n 1'),
-            nn.Sigmoid()
-        )
-
     def init_memories(self, batch):
         return {name: repeat(weights, '... -> b ...', b = batch) for name, weights in self.attn_memory.items()}
 
@@ -125,7 +127,6 @@ class FastWeightAttention(Module):
         # prenorm
 
         tokens = self.norm(tokens)
-        gates = self.to_gates(tokens)
 
         # add the fast weight memories
 
@@ -137,6 +138,13 @@ class FastWeightAttention(Module):
         # get the memories
 
         wq, wk, wv, wo = tuple(memory[name] for name in ('wq', 'wk', 'wv', 'wo'))
+        wg = memory.get('wg', None)
+
+        gates = None
+
+        if exists(wg):
+            gates = einsum(tokens, wg, 'b n d, b h d dh -> b h n dh')
+            gates = gates.sigmoid()
 
         # attention
 
@@ -155,7 +163,9 @@ class FastWeightAttention(Module):
 
         out = einsum(attn, v, 'b h i j, b h j dh -> b h i dh')
 
-        out = out * gates
+        if exists(gates):
+            out_pre_gate = out
+            out = out * gates
 
         pred_values = einsum(out, wo, 'b h n dh, b h dh d -> b n d')
 
@@ -170,7 +180,8 @@ class FastWeightAttention(Module):
             tokens[..., -1:, :],
             pred_values[..., -1:, :],
             out[..., -1:, :],
-            gates[..., -1:, :],
+            gates[..., -1:, :] if exists(gates) else None,
+            out_pre_gate[..., -1:, :] if exists(gates) else None,
             q[..., -1:, :],
             k[..., -1:, :],
             v[..., -1:, :]
@@ -181,24 +192,32 @@ class FastWeightAttention(Module):
         tokens = tokens[..., :-1, :]
         pred_values_for_fast_weight = pred_values[..., :-1, :]
         out = out[..., :-1, :]
-        gates = gates[..., :-1, :]
+
+        if exists(gates):
+            gates = gates[..., :-1, :]
+            out_pre_gate = out_pre_gate[..., :-1, :]
+
         attn_sliced = attn[..., :-1, :-1]
         q, k, v = q[..., :-1, :], k[..., :-1, :], v[..., :-1, :]
 
         if exists(boundary_state):
-            b_tokens, b_pred_values, b_out, b_gates, b_q, b_k, b_v = boundary_state
+            b_tokens, b_pred_values, b_out, b_gates, b_out_pre_gate, b_q, b_k, b_v = boundary_state
 
             boundary_target = self.to_target_values(tokens[..., :1, :])
             target_values = cat((boundary_target, target_values), dim = -2)
 
             # cleanly concat boundary state to the rest of the tensors
 
-            tokens, pred_values_for_fast_weight, out, gates, q, k, v = tuple(
+            tokens, pred_values_for_fast_weight, out, q, k, v = tuple(
                 cat((b_t, t), dim = -2) for b_t, t in zip(
-                    (b_tokens, b_pred_values, b_out, b_gates, b_q, b_k, b_v),
-                    (tokens, pred_values_for_fast_weight, out, gates, q, k, v)
+                    (b_tokens, b_pred_values, b_out, b_q, b_k, b_v),
+                    (tokens, pred_values_for_fast_weight, out, q, k, v)
                 )
             )
+
+            if exists(gates) and exists(b_gates):
+                gates = cat((b_gates, gates), dim = -2)
+                out_pre_gate = cat((b_out_pre_gate, out_pre_gate), dim = -2)
 
             # pad attention matrix dynamically for the boundary token
 
@@ -228,9 +247,12 @@ class FastWeightAttention(Module):
 
         dout = einsum(error, wo, 'b n d, b h dh d -> b h n dh')
 
-        du = dout * gates
+        du = dout * gates if exists(gates) else dout
 
         delta = reduce(dout * out, '... d -> ... 1', 'sum')
+
+        if exists(gates):
+            dgates_pre = dout * out_pre_gate * gates * (1 - gates)
 
         dv = einsum(attn, du, 'b h i j, b h i dh -> b h j dh')
 
@@ -246,10 +268,12 @@ class FastWeightAttention(Module):
         if muon_update:
             tokens_for_dwqk = multiply('b n d, b n', tokens, learning_rate)
             tokens_for_dwv = multiply('b n d, b n', tokens, muon_learning_rate)
+            tokens_for_dwg = multiply('b n d, b n', tokens, muon_learning_rate)
             out_for_dwo = multiply('b h n d, b n', out, muon_learning_rate)
         else:
             tokens_for_dwqk = tokens
             tokens_for_dwv = tokens
+            tokens_for_dwg = tokens
             out_for_dwo = out
 
         # get the next memories
@@ -259,13 +283,19 @@ class FastWeightAttention(Module):
         dwv = einsum(dv, tokens_for_dwv, 'b h j dh , b j d -> b h d dh')
         dwo = einsum(error, out_for_dwo, 'b n d, b h n dh -> b h dh d')
 
+        if exists(gates):
+            dwg = einsum(dgates_pre, tokens_for_dwg, 'b h i dh, b i d -> b h d dh')
+
         if muon_update:
             dwv = self.muon_update_fn(dwv)
             dwo = self.muon_update_fn(dwo)
 
+            if exists(gates):
+                dwg = self.muon_update_fn(dwg)
+
         # prep next memories
 
-        next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo)
+        next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo, wg = dwg if exists(gates) else None)
 
         if exists(past_mem):
             next_mems = add_memories(next_mems, past_mem)
