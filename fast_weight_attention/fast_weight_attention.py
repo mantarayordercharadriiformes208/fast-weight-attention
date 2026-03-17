@@ -130,10 +130,10 @@ class FastWeightAttention(Module):
 
         # add the fast weight memories
 
-        memory = self.init_memories(batch)
-
         if exists(past_mem):
-            memory = add_memories(memory, past_mem)
+            memory = past_mem
+        else:
+            memory = self.init_memories(batch)
 
         # get the memories
 
@@ -296,9 +296,7 @@ class FastWeightAttention(Module):
         # prep next memories
 
         next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo, wg = dwg if exists(gates) else None)
-
-        if exists(past_mem):
-            next_mems = add_memories(next_mems, past_mem)
+        next_mems = add_memories(memory, next_mems)
 
         if detach_next_memories:
             next_mems = {k: v.detach() for k, v in next_mems.items()}

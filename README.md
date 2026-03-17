@@ -25,6 +25,10 @@ retrieved, next_mem = mem(tokens, past_mem = next_mem, return_next_memories = Tr
 retrieved, next_mem = mem(tokens, past_mem = next_mem, return_next_memories = True)
 
 assert retrieved.shape == tokens.shape
+
+# you can then retrieve without fast weight updating
+
+retrieved = mem(tokens, return_next_memories = False)
 ```
 
 With chunked processing (automatically segments the sequence and carries memory across chunks):
