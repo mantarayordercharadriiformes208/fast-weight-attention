@@ -17,7 +17,6 @@ from adam_atan2_pytorch.polar_adam_atan2 import polar_express
 
 LinearNoBias = partial(Linear, bias = False)
 
-
 def AttentionMemory(*, wq, wk, wv, wo, wg = None):
     return remove_none_values(dict(wq = wq, wk = wk, wv = wv, wo = wo, wg = wg))
 
@@ -35,6 +34,20 @@ def default(v, d):
 def remove_none_values(d):
     return {k: v for k, v in d.items() if exists(v)}
 
+# differentiable clip weight norm
+
+def softclamp(t, value):
+    return (t / value).tanh() * value
+
+def soft_clip_max_norm(weights, max_norm, dim, eps = 1e-5):
+    assert max_norm > 1.
+    shift, scale = (max_norm + 1.) * 0.5, (max_norm - 1.) * 0.5
+
+    norm = weights.norm(dim = dim, p = 2, keepdim = True)
+    softclamped_norm = softclamp(norm - shift, scale) + shift
+
+    return weights / softclamped_norm.clamp_min(eps)
+
 # classes
 
 class FastWeightAttention(Module):
@@ -49,7 +62,8 @@ class FastWeightAttention(Module):
         max_muon_learning_rate = 1e-1,
         muon_update = True,
         use_polar_express = False,
-        use_gates = True
+        use_gates = True,
+        max_fast_weight_norm = None
     ):
         super().__init__()
 
@@ -75,7 +89,7 @@ class FastWeightAttention(Module):
         )
 
         if self.use_gates:
-            shapes['wg'] = (heads, dim, dim_value_head)
+            shapes.update(wg = (heads, dim, dim_value_head))
 
         self.attn_memory = ParameterDict({
             name: randn(shape) * (shape[-1] ** -0.5)
@@ -110,6 +124,16 @@ class FastWeightAttention(Module):
             nn.LayerNorm(dim, elementwise_affine = False)
         )
 
+        # whether to clip the fast weight norms
+        # Volchkov et al. from Clip to Grok
+
+        self.max_fast_weight_norm = max_fast_weight_norm
+        self.should_clip_weight_norm = exists(max_fast_weight_norm)
+        self.weight_name_to_row_dim = dict(wq = 1, wk = 1, wv = 1, wo = -1)
+
+        if self.use_gates:
+            self.weight_name_to_row_dim.update(wg = 1)
+
     def init_memories(self, batch):
         return {name: repeat(weights, '... -> b ...', b = batch) for name, weights in self.attn_memory.items()}
 
@@ -122,7 +146,7 @@ class FastWeightAttention(Module):
         boundary_state: tuple | None = None,
         return_boundary_state = False
     ):
-        batch, scale, muon_update = tokens.shape[0], self.scale, self.muon_update
+        batch, scale, muon_update, use_gates, should_clip_weight_norm = tokens.shape[0], self.scale, self.muon_update, self.use_gates, self.should_clip_weight_norm
 
         # prenorm
 
@@ -138,11 +162,11 @@ class FastWeightAttention(Module):
         # get the memories
 
         wq, wk, wv, wo = tuple(memory[name] for name in ('wq', 'wk', 'wv', 'wo'))
-        wg = memory.get('wg', None)
 
         gates = None
 
-        if exists(wg):
+        if use_gates:
+            wg = memory['wg']
             gates = einsum(tokens, wg, 'b n d, b h d dh -> b h n dh')
             gates = gates.sigmoid()
 
@@ -163,7 +187,7 @@ class FastWeightAttention(Module):
 
         out = einsum(attn, v, 'b h i j, b h j dh -> b h i dh')
 
-        if exists(gates):
+        if use_gates:
             out_pre_gate = out
             out = out * gates
 
@@ -180,8 +204,8 @@ class FastWeightAttention(Module):
             tokens[..., -1:, :],
             pred_values[..., -1:, :],
             out[..., -1:, :],
-            gates[..., -1:, :] if exists(gates) else None,
-            out_pre_gate[..., -1:, :] if exists(gates) else None,
+            gates[..., -1:, :] if use_gates else None,
+            out_pre_gate[..., -1:, :] if use_gates else None,
             q[..., -1:, :],
             k[..., -1:, :],
             v[..., -1:, :]
@@ -252,7 +276,7 @@ class FastWeightAttention(Module):
         delta = reduce(dout * out, '... d -> ... 1', 'sum')
 
         if exists(gates):
-            dgates_pre = dout * out_pre_gate * gates * (1 - gates)
+            dgates_pre = dout * out_pre_gate * gates * (1. - gates)
 
         dv = einsum(attn, du, 'b h i j, b h i dh -> b h j dh')
 
@@ -283,20 +307,31 @@ class FastWeightAttention(Module):
         dwv = einsum(dv, tokens_for_dwv, 'b h j dh , b j d -> b h d dh')
         dwo = einsum(error, out_for_dwo, 'b n d, b h n dh -> b h dh d')
 
-        if exists(gates):
+        dwg = None
+
+        if use_gates:
             dwg = einsum(dgates_pre, tokens_for_dwg, 'b h i dh, b i d -> b h d dh')
 
         if muon_update:
             dwv = self.muon_update_fn(dwv)
             dwo = self.muon_update_fn(dwo)
 
-            if exists(gates):
+            if use_gates:
                 dwg = self.muon_update_fn(dwg)
 
         # prep next memories
 
-        next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo, wg = dwg if exists(gates) else None)
+        next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo, wg = dwg)
         next_mems = add_memories(memory, next_mems)
+
+        # maybe clip weight norms
+
+        if should_clip_weight_norm:
+            for weight_name, row_dim in self.weight_name_to_row_dim.items():
+                weight = next_mems[weight_name]
+                next_mems[weight_name] = soft_clip_max_norm(weight, self.max_fast_weight_norm, dim = row_dim)
+
+        # maybe detach
 
         if detach_next_memories:
             next_mems = {k: v.detach() for k, v in next_mems.items()}

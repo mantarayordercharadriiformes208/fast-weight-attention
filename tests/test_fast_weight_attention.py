@@ -15,6 +15,7 @@ def exists(val):
 
 @param('causal', (False, True))
 @param('use_gates', (False, True))
+@param('max_fast_weight_norm', (None, 2.))
 @param('muon_update,use_polar_express', [
     (False, False),
     (True, False),
@@ -24,9 +25,10 @@ def test_mem(
     causal,
     use_gates,
     muon_update,
+    max_fast_weight_norm,
     use_polar_express
 ):
-    mem = FastWeightAttention(512, causal = causal, muon_update = muon_update, use_polar_express = use_polar_express, use_gates = use_gates)
+    mem = FastWeightAttention(512, causal = causal, muon_update = muon_update, use_polar_express = use_polar_express, use_gates = use_gates, max_fast_weight_norm = max_fast_weight_norm)
 
     tokens = torch.randn(1, 64, 512)
 

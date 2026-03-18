@@ -47,6 +47,7 @@ class MemorizingModel(nn.Module):
         muon_update = True,
         use_polar_express = False,
         max_learning_rate = 1e-2,
+        max_fast_weight_norm = None,
         chunk_size = 4,
         use_forget_gate = True,
         use_gates = True
@@ -66,7 +67,8 @@ class MemorizingModel(nn.Module):
                         muon_update = muon_update,
                         use_polar_express = use_polar_express,
                         max_learning_rate = max_learning_rate,
-                        use_gates = use_gates
+                        use_gates = use_gates,
+                        max_fast_weight_norm = max_fast_weight_norm
                     ),
                     chunk_size = chunk_size,
                     use_forget_gate = use_forget_gate
@@ -119,6 +121,7 @@ def train(
     muon_update = True,
     use_polar_express = True,
     max_learning_rate = 1e-3,
+    max_fast_weight_norm = None,
     use_forget_gate = False,
     single_run = False
 ):
@@ -159,7 +162,8 @@ def train(
             max_learning_rate = max_learning_rate,
             chunk_size = chunk_size,
             use_forget_gate = use_forget_gate,
-            use_gates = use_gates
+            use_gates = use_gates,
+            max_fast_weight_norm = max_fast_weight_norm
         )
         optim = Adam(model.parameters(), lr = lr)
 
