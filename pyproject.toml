@@ -1,6 +1,6 @@
 [project]
 name = "fast-weight-attention"
-version = "0.1.7"
+version = "0.1.8"
 description = "Fast Weight Attention"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }

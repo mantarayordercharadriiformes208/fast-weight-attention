@@ -141,6 +141,7 @@ class FastWeightAttention(Module):
         self,
         tokens,
         return_next_memories = False,
+        return_grads_only = False,
         past_mem: AttentionMemory | None = None,
         detach_next_memories = False,
         boundary_state: tuple | None = None,
@@ -322,7 +323,9 @@ class FastWeightAttention(Module):
         # prep next memories
 
         next_mems = AttentionMemory(wq = dwq, wk = dwk, wv = dwv, wo = dwo, wg = dwg)
-        next_mems = add_memories(memory, next_mems)
+
+        if not return_grads_only:
+            next_mems = add_memories(memory, next_mems)
 
         # maybe clip weight norms
 
